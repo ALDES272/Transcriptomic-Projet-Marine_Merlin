@@ -1,0 +1,261 @@
+---
+title: "DESeq Analysis"
+author: "Alessandro Desy"
+date: "`r Sys.Date()`"
+output:
+   html_document:
+    toc: true
+    toc_depth: 2
+    theme: united
+    number_section : no
+    toc_float:
+      collapsed: no
+      smooth_scroll : yes
+---
+
+```{r setup, include=FALSE}
+#the following line is to be changed based on your setup
+your_folder="H:/DRT/PHYSIQUE ET GÉNIE BIOMÉDICAL/10.UTILISATEURS/Alessandro/Etudiants/Bioinformatique_Marine"
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = your_folder) 
+
+# tutorials :
+## Squid Tutos :
+### https://www.youtube.com/watch?v=H1cUs6pql9s
+### https://biostatsquid.com/pathway-enrichment-analysis-tutorial-clusterprofiler/#step1
+### https://biostatsquid.com/pathway-enrichment-analysis-plots/
+
+# enrichKEGG help :
+## https://www.rdocumentation.org/packages/clusterProfiler/versions/3.0.4/topics/enrichKEGG
+
+## hsa organism : 
+### https://www.genome.jp/kegg-bin/show_organism?org=hsa 
+
+## library of clusterprofiler :
+### https://yulab-smu.top/biomedical-knowledge-mining-book/clusterprofiler-kegg.html
+```
+
+
+# Introduction
+
+This document describes the steps leading to the Pathway enrichment analysis in the work of M. Merlin et al.
+
+# Setup
+
+We download the different libraries of use and set up the environment.
+```{r packages_import, echo= T, results = 'hide', message=FALSE, warning=FALSE}
+library(clusterProfiler)
+# library(readr)
+library(dplyr)
+# library(here)
+library(DESeq2)
+# library(readxl)
+library(tidyverse)
+library(ggplot2)
+library(ComplexHeatmap)
+# library(apeglm)
+# library(pheatmap)
+library("RColorBrewer")
+library(enrichplot)
+library(ggupset)
+library(DOSE)
+library(BiocManager)
+```
+
+
+We first import the differentially expressed genes file : dds_res_unique.csv that was generated in the DESeq_Analysis.Rmd.
+
+```{r dds_import}
+dds_res <- read.csv("./Output_R_Aless/dds_res_unique.csv")
+head(dds_res)
+```
+
+
+In this dds_res file we can have some duplicate genes, identified with a "." followed by a number at the end of their "X" value (first column of the file). So we create a symbol column that can have several time the same exact gene name.
+
+```{r dds_symbol_addition}
+dds_res <- dds_res%>%mutate(symbol=gsub("\\.[0-9]$","",X))
+head(dds_res)
+print(paste("Out of the", nrow(dds_res), "total genes,",length(unique(dds_res$symbol)),"are non duplicates (",round(100*length(unique(dds_res$symbol))/nrow(dds_res),1),"%)."))
+```
+
+
+To later run KEGG Enrichment analysis, we need to specify the genes by their entrez_id (run "?enrichKEGG"), which is not currently present in our file. So from raw data, we add the entrez_id
+
+```{r dds_entrez_id_addition}
+raw_counts_kegg <- read.csv("./Data/full_raw_counts.csv") %>% select (-c('CCt8','CTTT8'))
+symbo_ezid <- raw_counts_kegg%>%select(c('symbol','entrez_id'))%>%unique()
+
+dds_res <- left_join(x=dds_res,y=symbo_ezid,by="symbol")
+head(dds_res)
+```
+
+Before filtering the differentially expressed genes, we first select all of the genes of interest in our file that will be used as background genes in the KEGG analysis.
+
+```{r background_genes}
+genes_in_data <- unique(dds_res$entrez_id)
+```
+
+
+## Differentially expressed genes
+
+Now we can filter our dds file to only keep differentially expressed genes. When a gene has a log2fold change positive and an adjusted p-value, it is defined as up-regulated. When its log2fold change is negative, and adjusted p-value is negative, it is down-regulated.
+
+```{r diff_express_creation}
+dds_res <- dds_res%>%mutate(diffexpressed=case_when(
+  log2FoldChange >0 &padj < 0.05 ~ 'UP',
+  log2FoldChange <0 & padj < 0.05 ~ 'DOWN',
+  padj > 0.05 ~ 'NO',
+  is.na(padj) ~ NA
+))
+initnrow <- nrow(dds_res) 
+
+dds_res <- dds_res%>%filter(diffexpressed %in% c('UP','DOWN'))
+print(paste('When keeping only differentially expressed genes we go from',
+            initnrow,'down to',nrow(dds_res),' genes (',round(100*nrow(dds_res)/initnrow,2),'%)'))
+```
+ 
+```{r post_diff_expressed_duplicates}
+print(paste("Out of the", nrow(dds_res), "differentially expressed genes,",length(unique(dds_res$symbol)),"are non duplicates (",round(100*length(unique(dds_res$symbol))/nrow(dds_res),1),"%)."))
+```
+We create a list containing two data frames : the up-regulated and the down-regulated. ClusterProfiler will be run seprately on each of these subsets.
+
+```{r up_down_list_creation}
+def_results_list <- split(dds_res,dds_res$diffexpressed)
+```
+
+
+We are now ready for the KEGG enrichment analysis.
+
+# KEGG
+
+The KEGG analysis is separated in two parts : first the pathway over-representation preparation and secondly, the plot analysis
+
+## KEGG pathway preparation
+
+The KEGG  pathway over-representation analysis results are stored in three files : the down-regulated genes, the up-regulated ones and a combinaison of both. By default, the pAdjustMethod is the Benjamini-Hochberg, adjusted p-value cutoff is set at $5\%$ and the organsime is hsa (homo sapiens). 
+We also set the background genes with the pre-defineded genes_in_data variable
+
+
+ 
+```{r kegg_pathway_prep}
+
+DOWN_res_kegg_pw = enrichKEGG(gene=def_results_list[[1]]$entrez_id,
+                      organism     = 'hsa', pvalueCutoff=0.05,universe = as.character(genes_in_data) )
+UP_res_kegg_pw = enrichKEGG(gene=def_results_list[[2]]$entrez_id,
+                      organism     = 'hsa', pvalueCutoff=0.05,universe = as.character(genes_in_data) )
+
+res_kegg_pw <- lapply(names(def_results_list) , 
+              function(x) enrichKEGG(gene=def_results_list[[x]]$entrez_id,
+                                organism     = 'hsa', pvalueCutoff=0.05,universe = as.character(genes_in_data) ))
+names(res_kegg_pw) <- names(def_results_list)
+
+res_df_kegg_pw <- rbind(res_kegg_pw[[1]]@result%>%mutate(UP_DOWN=names(res_kegg_pw)[1]),res_kegg_pw[[2]]@result%>%mutate(UP_DOWN=names(res_kegg_pw)[2]))
+
+head(res_df_kegg_pw,3)
+
+#pour sauvegarder donnees:
+# write.csv(res_df,"./Output_R_Aless/kegg_res_unique.csv", row.names = T)
+```
+
+
+## KEGG pathway analysis
+
+
+```{r kegg_pathway_plots}
+
+barplot(UP_res_kegg_pw,showCategory = 20,title='KEGG pathway - Up regulated - Barplot')
+barplot(DOWN_res_kegg_pw,showCategory = 20,title='KEGG pathway - Down regulated - Barplot')
+
+dotplot(UP_res_kegg_pw,showCategory = 20,title='KEGG pathway - Up regulated - Dotplot')
+dotplot(DOWN_res_kegg_pw,showCategory = 20,title='KEGG pathway - Down regulated - Dotplot')
+
+
+cnetplot(UP_res_kegg_pw ,title='KEGG pathway - Up regulated - CNETplot')
+cnetplot(DOWN_res_kegg_pw ,title='KEGG pathway - Down regulated - CNETplot')
+
+heatplot(UP_res_kegg_pw)#,title='KEGG pathway - Up regulated - Heatplot')
+heatplot(DOWN_res_kegg_pw)#  ,title='KEGG pathway - Down regulated - Heatplot')
+
+
+treeplot(pairwise_termsim(UP_res_kegg_pw))# ,title='KEGG pathway - Up regulated - Treeplot')
+treeplot(pairwise_termsim(DOWN_res_kegg_pw) )#,title='DOWN_res regulated - Treeplot')
+
+emapplot(pairwise_termsim(UP_res_kegg_pw) )#,title='KEGG pathway - Up regulated - EMAplot')
+emapplot(pairwise_termsim(DOWN_res_kegg_pw))# ,title='DOWN_res regulated - EMAplot')
+
+```
+
+
+Following, the GO analysis.
+
+
+# GO Enrichment analysis
+
+ 
+## GO Enrichment preparation
+
+The different GO databases are located in https://bioconductor.org/packages/release/BiocViews.html#___OrgDb. Here we use the 'org.Hs.eg.db', the genome for human. 
+ 
+GO comprises three orthogonal ontologies : molecular function (MF), biological process (BP), and cellular component (CC). The optin "All" allows to select them all. These four options can be tested in the following. But we shall show the results only for the 'All' orthogonal ontology.
+
+```{r ont_val_selection} 
+ont_val=c('BP','MF','CC','ALL')[4] #select the wanted ont value by changing the number (1 to 4)
+```
+
+
+Similar to KEGG analysis, the GO analysis shall be performed for up and down-regulated genes. The p-adjusted method is the default one : Benjamini-Hochberg. The p-value cutoff is at $5\%$. 
+```{r go_prep} 
+DOWN_res_go = enrichGO(gene=def_results_list[[1]]$entrez_id,
+                       OrgDb     = 'org.Hs.eg.db',   ont=ont_val,pvalueCutoff=0.05 )
+UP_res_go = enrichGO(gene=def_results_list[[2]]$entrez_id,
+                     OrgDb     = 'org.Hs.eg.db',   ont=ont_val, pvalueCutoff=0.05 )
+
+res_go <- lapply(names(def_results_list) , 
+              function(x) enrichGO(gene=def_results_list[[x]]$entrez_id,
+                                   OrgDb     = 'org.Hs.eg.db', pvalueCutoff=0.05 ))
+
+names(res_go) <- names(def_results_list)
+
+
+res_df_go <- rbind(res_go[[1]]@result%>%mutate(UP_DOWN=names(res_go)[1]),res_go[[2]]@result%>%mutate(UP_DOWN=names(res_go)[2]))
+
+head(res_df_go) 
+#pour sauvegarder donnees:
+# write.csv(DOWN_res_go,paste0("./Output_R_Aless/GO_results/DOWN_res_go_",ont_val,"_unique.csv"), row.names = T)
+# write.csv(UP_res_go,paste0("./Output_R_Aless/GO_results/UP_res_go_",ont_val,"_unique.csv"), row.names = T)
+# 
+# write.csv(res_df_go,paste0("./Output_R_Aless/GO_results/UP_res_go_",ont_val,"_unique.csv"), row.names = T)
+#  
+
+```
+
+## GO Analysis
+
+```{r go_plots}
+
+dotplot(UP_res_go,showCategory = 20,title=paste('GO - Up regulated - ont:',ont_val))
+dotplot(DOWN_res_go,showCategory = 20,title=paste('GO - Down regulated - ont:',ont_val)) 
+
+barplot(UP_res_go,showCategory = 20,title=paste('GO - Up regulated - ont:',ont_val))
+barplot(DOWN_res_go,showCategory = 20,title=paste('GO - Down regulated - ont:',ont_val))
+
+
+
+cnetplot(UP_res_go ,title=paste('GO - Up regulated - ont:',ont_val))
+cnetplot(DOWN_res_go ,title=paste('GO - Down regulated - ont:',ont_val))
+
+heatplot(UP_res_go,showCategory = 12)# ,title=paste('GO - Up regulated - ont:',ont_val))
+heatplot(DOWN_res_go,showCategory = 20)# ,title=paste('GO - Down regulated - ont:',ont_val))
+
+
+treeplot(pairwise_termsim(UP_res_go))# ,title='paste(GO - Up regulated - ont:',ont_val))
+treeplot(pairwise_termsim(DOWN_res_go))# ,title=paste('GO - DOWN_res regulated - ont:',ont_val))
+
+emapplot(pairwise_termsim(UP_res_go))# ,title=paste('GO - Up regulated - ont:',ont_val))
+emapplot(pairwise_termsim(DOWN_res_go))# ,title=paste('GO - DOWN_res regulated - ont:',ont_val))
+
+
+
+```
+

@@ -1,0 +1,392 @@
+---
+title: "DESeq Analysis"
+author: "Alessandro Desy"
+date: "`r Sys.Date()`"
+output:
+   html_document:
+    toc: true
+    toc_depth: 2
+    theme: united
+    number_section : no
+    toc_float:
+      collapsed: no
+      smooth_scroll : yes
+---
+
+```{r setup, include=FALSE}
+
+#the following line is to be changed based on your setup
+your_folder="H:/DRT/PHYSIQUE ET GÉNIE BIOMÉDICAL/10.UTILISATEURS/Alessandro/Etudiants/Bioinformatique_Marine"
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = your_folder) 
+#notes on duplicates:
+#https://help.galaxyproject.org/t/too-many-duplicated-sequences-or-unassigned-because-of-mapping-quality/11965/3
+#https://dnatech.ucdavis.edu/faqs/should-i-remove-pcr-duplicates-from-my-rna-seq-data#:~:text=For%20example%20plant%20RNA%2Dseq,%2Dcell%20RNA%2Dseq%20protocols.
+#https://bmcgenomics.biomedcentral.com/articles/10.1186/s12864-018-4933-1#:~:text=Unique%20molecular%20identifiers%20(UMIs)%20are,need%20to%20have%20different%20UMIs.
+```
+
+# Introduction
+
+This document presents the different DeSeq analysis that were performed in the work of Merlin M. et al.
+
+This document was based on the informations provided by the following : 
+
+- Computational Genomics Course of Université Laval
+- Bioconductor Helper : https://bioconductor.org/packages/release/bioc/vignettes/DESeq2/inst/doc/DESeq2.html
+
+## Setup
+
+We download the different libraries of use and set up the environment.
+```{r packages_import, echo= T, results = 'hide', message=FALSE, warning=FALSE}
+library(DESeq2)
+library(readxl)
+library(tidyverse)
+library(ggplot2)
+library(ComplexHeatmap)
+library(apeglm)
+library(pheatmap)
+library("RColorBrewer")
+```
+
+# Raw Data
+We import the raw data for this study.
+
+```{r raw_data_import}
+#to adapt to your pathway :
+raw_file="./Data/raw_counts.xlsx"
+
+raw_counts <- read_excel(raw_file)
+print(nrow(raw_counts))
+#we only keep non duplicate values
+raw_counts <- distinct(raw_counts)
+print(nrow(raw_counts))
+raw_counts_mat<- raw_counts[, -1] %>% as.matrix
+rownames(raw_counts_mat)<- raw_counts$symbol
+head(raw_counts_mat)
+```
+In this file, the first two columns are the control group ; and the two latest are the TMZ (temozolomid treatred mice) group to be compared. We create the coldata data frame with this information and we give its row names the same values as the column names of raw_counts_mat. 
+
+```{r coldata_setup}
+coldata<- data.frame(condition = c("Control", "Control", "TMZ", "TMZ"))
+ 
+rownames(coldata)<- colnames(raw_counts_mat)
+
+head(coldata) 
+print(paste("Is the coldata rownames order similar to raw_counts_mat colnames order ?", all(rownames(coldata) == colnames(raw_counts_mat)))) 
+```
+# DeSeq Object
+
+## DeSeqDataSet creation
+
+Now we can run the DeSeq2 script.
+
+```{r deseqdataset_run}
+
+dds <- DESeqDataSetFromMatrix(countData = raw_counts_mat,
+                              colData = coldata,
+                              design = ~ condition) 
+print(dds) 
+```
+
+Based on the following, https://bioconductor.org/packages/release/bioc/vignettes/DESeq2/inst/doc/DESeq2.html#pre-filtering, we prefilter the dds results by keeping only rows where at minimum 10 counts are measured in at least 3 groups. 
+```{r deseq_pre_filter}
+keep <- rowSums(counts(dds)>= 10) >=3 
+print(paste("With this filter,",sum(keep==T),"genes are kept (",round(sum(keep==T)*100/length(keep),2),"%)"))
+dds <- dds[keep,]
+```
+The default reference level is chosen alphabetically (i.e, in this case "Control"). But just to ensure this, we run the following line.
+
+```{r level_set_up}
+print(paste('In our dds, ',levels(dds$condition)[1],' is the reference and',
+            levels(dds$condition)[2], ' is compared to it.'))
+```
+## DeSeq run
+Now we can run the differential expression analysis.
+
+```{r deseq_run, message=FALSE, warning=FALSE}
+dds <- DESeq(dds) 
+```
+
+The dds results are saved in the following res_xxx variables, with the default results method saved in the res variable.
+
+```{r deseq_results}
+res <- results(dds, contrast = c("condition", "TMZ", "Control")) 
+res_BY <- results(dds, contrast = c("condition", "TMZ", "Control"),pAdjustMethod='BY') 
+res_BH <- results(dds, contrast = c("condition", "TMZ", "Control"),pAdjustMethod='BH') 
+res_fdr <- results(dds, contrast = c("condition", "TMZ", "Control"),pAdjustMethod='fdr') 
+res_bonferroni <- results(dds, contrast = c("condition", "TMZ", "Control"),pAdjustMethod='bonferroni')
+res_holm <- results(dds, contrast = c("condition", "TMZ", "Control"),pAdjustMethod= "holm") 
+```
+
+In the previous lines, we defined each res_xxx variable based on different pAdjustMethods, with the default being BH. These results files have the following structure :
+```{r res_xxx_structure}
+res
+
+write.csv(as.data.frame(res),"./Output_R_Aless/dds_res_unique.csv", row.names = T)
+```
+
+- **baseMean** is the average of normalized counts ;
+
+- **log2FoldChange** is positive when the gene is upregulated in the TMZ group ;
+
+- **stat** is the Wald test value for a given gene ;
+
+- **pvalue** is the p-value of the test for a given gene (duh) ;
+
+- **padj** is the p-value corrected for multiple-testing (?). It allows to remove false positive results based on the given method (Benjamini, Hochberg, etc.).
+
+Based on the following : https://bioconductor.org/packages/devel/bioc/vignettes/DESeq2/inst/doc/DESeq2.html#alternative-shrinkage-estimators , we also define a resLFC variable. It is based on an alternative shrinkage estimator and allows for better ranking and visualisation.
+
+```{r resLFC_creation}
+resLFC <- lfcShrink(dds, coef="condition_TMZ_vs_Control", type="apeglm") 
+```
+
+
+# DeSeq results analysis
+
+## MA-plot
+
+The following line gives a summary of the results obtained in the default res variable :
+```{r deseq_res_summary}
+summary(res)
+```
+
+And here are the results obtained in the shrunk effect size (LFC) results :
+
+```{r deseq_resLFC_summary}
+summary(resLFC)
+```
+
+As we can see, in this case it basically give the same results. But now we plot their respective MA-plot that shows the log fold change Vs the mean of normalized counts (https://bioconductor.org/packages/release/bioc/vignettes/DESeq2/inst/doc/DESeq2.html#exploring-and-exporting-results).
+
+```{r plot_ma_res}
+plotMA(res, ylim=c(-2,2), main="MA-plot of res")
+plotMA(resLFC, ylim=c(-2,2), main="MA-plot of shrunken log2 fold change results")
+```
+
+In the shrunken MA-plot, we had removed the noise associated with log2 fold changes from low count genes without requiring arbitrary filtering thresholds.
+
+## Volcano plot
+
+Here are presented  the volcano plots corresponding to each Deseq result. 
+
+```{r volcano_plots}
+volcanofunc <- function(ds_res,subtt){
+  ds_res$diffexpressed_padj <- "Not significative"
+  ds_res$diffexpressed_padj[ds_res$log2FoldChange > 0 & ds_res$padj < 0.05] <- "Up"
+  ds_res$diffexpressed_padj[ds_res$log2FoldChange < -0 & ds_res$padj < 0.05] <- "Down"
+  nb_up=nrow(ds_res[ds_res$diffexpressed_padj=='Up',])
+  nb_dw=nrow(ds_res[ds_res$diffexpressed_padj=='Down',])
+   
+  print(paste('In the',subtt, 'result file, there are', nb_up, 'genes up,',
+              round(100*nb_up/nrow(ds_res),2),'%'))
+  print(paste('In the',subtt, 'result file, there are', nb_dw, 'genes Down,',
+              round(100*nb_dw/nrow(ds_res),2),'%'))
+  
+  res_sig <- ds_res%>%
+    as.data.frame()%>%
+    tibble::rownames_to_column(var='gene')%>%
+    filter(!stringr::str_detect(gene,'LOC'))%>%
+    filter(abs(log2FoldChange)>=4,padj<=0.001)
+    
+  ggplot(data=ds_res, aes(x=log2FoldChange, y=-log10(padj),col=diffexpressed_padj)) + 
+    geom_point() + 
+    theme_minimal() +
+    # geom_label(data=res_sig,aes(label=gene))+
+    scale_color_manual(values=c("#4285f4", "grey", "#ea4335"))+
+    theme(legend.title=element_blank())+
+    ggtitle(paste("Volcano Plot -",subtt))
+  
+}
+
+##volcano plot de BH
+volcanofunc(res,'Default')
+```
+
+
+```{r volcano_plots_BH}
+##volcano plot des autres 
+volcanofunc(res_BH, 'BH') #BH correspond à la correction de défaut
+```
+
+
+```{r volcano_plots_fdr}
+volcanofunc(res_fdr, 'fdr')
+```
+
+
+```{r volcano_plots_by}
+volcanofunc(res_BY, 'BY')
+```
+
+
+```{r volcano_plots_bonfe}
+volcanofunc(res_bonferroni, 'bonferroni')
+```
+
+
+```{r volcano_plots_holm}
+volcanofunc(res_holm, 'holm') 
+```
+
+## Information on results
+
+The following is a paste of https://bioconductor.org/packages/release/bioc/vignettes/DESeq2/inst/doc/DESeq2.html
+
+
+For a particular gene, a log2 fold change of -1 for condition treated vs untreated means that the treatment induces a multiplicative change in observed gene expression level of $2^{−1}=0.5$
+ compared to the untreated condition. If the variable of interest is continuous-valued, then the reported log2 fold change is per unit of change of that variable.
+
+
+**Note on p-values set to NA**: some values in the results table can be set to NA for one of the following reasons:
+
+- If within a row, all samples have zero counts, the baseMean column will be zero, and the log2 fold change estimates, p value and adjusted p value will all be set to NA.
+
+- If a row contains a sample with an extreme count outlier then the p value and adjusted p value will be set to NA. These outlier counts are detected by Cook’s distance. Customization of this outlier filtering and description of functionality for replacement of outlier counts and refitting is described below
+
+- If a row is filtered by automatic independent filtering, for having a low mean normalized count, then only the adjusted p value will be set to NA. Description and customization of independent filtering is described below
+
+## Variance Stabilizing Transformation and PCA
+
+This transformation removes the dependance of the variance on the mean. We can then plot the PCA (principal components analysis). 
+
+```{r vsd1}
+vsd <- vst(dds, blind=FALSE) #Extracting transformed values
+# head(assay(vsd), 4)
+
+# plotPCA(vsd, intgroup=c("condition")) # par défaut cette ligne ne prend aue les n=500 premiers genes
+plotPCA(vsd, intgroup=c("condition"),ntop=length(assay(vsd))) # ici permet d'obtenir le meme graphique que plus bas
+```
+
+This plot was generated by using all of the genes (n=`r length(assay(vsd))`).
+
+
+
+## Heatmap
+In this section we create the default heatmap. We first select the first 20 genomes in terms of average measured counts.
+
+```{r pheatmap}
+select <- order(rowMeans(counts(dds,normalized=TRUE)),decreasing=TRUE)[1:20]
+df <- as.data.frame(colData(dds)[,"condition"])
+
+colnames(df)=c('condition')
+rownames(df) <- colnames(assay(vsd))
+
+#ci-dessous est représenté sous forme de heatmap l'information suivante :
+assay(vsd)[select,]
+pheatmap(assay(vsd)[select,], cluster_rows=FALSE, show_rownames=T,
+         cluster_cols=FALSE, annotation_col=df)
+
+```
+
+This time we create a heat map with genes having the highest difference of average counts when comparing Control with TMZ
+
+```{r pheatmap2}
+
+order_diff <- rownames(as.data.frame(counts(dds))%>%mutate(mean_diff=abs((ACt8+BCt8)/2-(ATTT8+BTTT8)/2))%>%arrange(-mean_diff))
+#as.data.frame(counts(dds))%>%mutate(mean_diff=abs((ACt8+BCt8)/2-(ATTT8+BTTT8)/2)) %>%arrange(-mean_diff)
+
+
+select=order_diff[0:20] #prend vingt premieres
+assay(vsd)[select,]
+pheatmap(assay(vsd)[select,], cluster_rows=FALSE, show_rownames=T,
+         cluster_cols=FALSE, annotation_col=df)
+
+```
+
+
+## Sample-to-sample distances heatmap
+
+A heatmap of this distance matrix gives us an overview over similarities and dissimilarities between samples. But unsure about its usefulness. 
+
+
+```{r sample_dist_HM}
+sampleDists <- dist(t(assay(vsd)))
+sampleDistMatrix <- as.matrix(sampleDists)
+rownames(sampleDistMatrix) <- paste(vsd$condition, sep="-")
+colnames(sampleDistMatrix) <- NULL
+colors <- colorRampPalette( rev(brewer.pal(9, "Blues")) )(255)
+pheatmap(sampleDistMatrix,
+         clustering_distance_rows=sampleDists,
+         clustering_distance_cols=sampleDists,
+         col=colors)
+
+
+```
+
+## Statistics
+
+In the following, we generate a data frame that contains the average values per group (Control vs TMZ) and their absolute and relative differences.
+```{r df_stats_gen}
+mydf <- as.data.frame(assay(vsd)) 
+mydf <- mydf%>%mutate(Ctrl_mean=(ACt8+BCt8)/2,Treat_mean=(ATTT8+BTTT8)/2)%>%
+  mutate(diff_abs=Treat_mean-Ctrl_mean)%>%
+  mutate(diff_rel=100*diff_abs/Ctrl_mean)
+head(mydf)
+write.csv(mydf,"./Output_R_Aless/mean_counts_diff_unique.csv", row.names = T)
+```
+
+
+The genes with the the most important positive and negative absolute differences are the following :
+```{r highest_diff_abs_stat}
+mydf%>%arrange(-diff_abs)%>%select(Ctrl_mean,Treat_mean,diff_abs,diff_rel)%>%head(30)
+mydf%>%arrange(diff_abs)%>%select(Ctrl_mean,Treat_mean,diff_abs,diff_rel)%>%head(30)
+```
+
+
+The genes with the the most important positive and negative relative differences are the following :
+```{r highest_diff_rel_stat}
+mydf%>%arrange(-diff_rel)%>%select(Ctrl_mean,Treat_mean,diff_abs,diff_rel)%>%head(30)
+mydf%>%arrange(diff_rel)%>%select(Ctrl_mean,Treat_mean,diff_abs,diff_rel)%>%head(30)
+```
+
+
+## Other PCA and Heatmap
+
+The following is inspired by https://www.youtube.com/watch?v=LmZD_a8XZEQ.
+
+First, we recreate the PCA plot.
+```{r pca_bis}
+
+normalized_counts<- assay(vsd) %>%  as.matrix()
+ 
+pca_prcomp<- prcomp(t(normalized_counts), center = TRUE, scale. = FALSE)
+# str(pca_prcomp)
+# pca_prcomp$x
+ 
+PC1_and_PC2<- data.frame(PC1=pca_prcomp$x[,1], PC2= pca_prcomp$x[,2],  type = rownames(pca_prcomp$x))
+ggplot(PC1_and_PC2, aes(x=PC1, y=PC2, col=type)) + 
+       geom_point() + 
+       geom_text(aes(label = type), hjust=0, vjust=0) +
+       coord_fixed()
+
+```
+
+We observe that the previous graph is similar to the automatically generated plotPCA function. We can now focus on the HeatMap. First we only keep the significant genes (p-value > 5% and log2FoldChange >1 or <-1)
+
+```{r signifcant_genes}
+significant_genes<- res %>% as.data.frame() %>%
+  filter(padj <=0.05, abs(log2FoldChange) >= 1) %>% 
+  rownames()
+
+significant_mat<- normalized_counts[significant_genes, ] 
+
+print(paste("When considering the signifcant genes, the number of genes went from", nrow(normalized_counts),
+            "to", nrow(significant_mat), "(", round(100*nrow(significant_mat)/nrow(normalized_counts),2), "%)"))
+
+```
+```{r heat_map_bis}
+col_anno <- HeatmapAnnotation(df = coldata, col = list( condition = c("TMZ" = "orange", "Control" = "darkgreen")))
+
+Heatmap(t(scale(t(significant_mat))), 
+        top_annotation = col_anno,
+        show_row_names = FALSE, name = "scaled normalized\nexpression")
+
+Heatmap(t((t(significant_mat))), 
+        top_annotation = col_anno,
+        show_row_names = FALSE, name = "unscaled")
+```
+
+
+
+ 

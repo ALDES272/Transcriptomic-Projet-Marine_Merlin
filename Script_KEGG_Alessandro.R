@@ -59,7 +59,7 @@ genes_in_data <- unique(gsub("\\.[0-9]$","",dds_res$X))
 print(paste('Des',nrow(dds_res),' genes de dds,',
             sum(dds_res$X%in% raw_counts_kegg$symbol),'sont dans le raw_counts_kegg (', 
             round(sum(dds_res$X%in% raw_counts_kegg$symbol)*100/nrow(dds_res),2),'%)'))
-print(paste('Ces genes qui ne sont pas présents correspondent notammenet a :',
+print(paste('Ces genes qui ne sont pas présents correspondent notamment a :',
 dds_res%>%filter(! X %in% raw_counts_kegg$symbol )%>% select(X) %>%head()%>%as.vector))
 #il s'agit la de genes duppliqués dans dds qui étaient présents en double dans les raw_counts initiaux
 
@@ -97,12 +97,15 @@ dds_res <- left_join(x=dds_res,y=symbo_ezid)
 def_results_list <- split(dds_res,dds_res$diffexpressed)
 
 
-
-
+ 
 
 
 
 ### clusterProfiler et KEGG 
+
+# ?enrichKEGG
+#
+#We tried to set the universe (background genes) with the genes_in_data variable, but the enrichKEGG cannot run... We can't find an explanation to this (see https://bioconductor.org/packages/release/data/experiment/manuals/scRNAseq/man/scRNAseq.pdf).
 
 
 DOWN_res = enrichKEGG(gene=def_results_list[[1]]$entrez_id,

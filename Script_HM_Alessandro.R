@@ -1,6 +1,4 @@
-# library(dplyr)
-# library(readr)
-# library(here)
+
 library(DESeq2)
 library(readxl)
 library(tidyverse)
@@ -29,7 +27,7 @@ rownames(raw_counts_mat)<- raw_counts$symbol
 coldata<- data.frame(condition = c("Control", "Control", "TMZ", "TMZ"))
 rownames(coldata)<- colnames(raw_counts_mat) #absolument nécessaire qu'ordre des lignes de coldata soit
 #identique à ordre des colonnes dans raw_counts_mat. Ici pour checker :
-print(paste("est-ce qu'ordre de rownames et coldata est correct :", all(rownames(coldata) == colnames(raw_counts_mat))))
+print(paste("est-ce que l'ordre de rownames et coldata est similaire :", all(rownames(coldata) == colnames(raw_counts_mat))))
 
 
 
