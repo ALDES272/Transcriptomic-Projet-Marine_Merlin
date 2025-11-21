@@ -1,11 +1,11 @@
 ---
-title: "DESeq Analysis"
+title: "Pathway Analysis"
 author: "Alessandro Desy"
 date: "`r Sys.Date()`"
 output:
    html_document:
     toc: true
-    toc_depth: 2
+    toc_depth: 3
     theme: united
     number_section : no
     toc_float:
@@ -99,7 +99,7 @@ genes_in_data <- unique(dds_res$entrez_id)
 
 ## Differentially expressed genes
 
-Now we can filter our dds file to only keep differentially expressed genes. When a gene has a log2fold change positive and an adjusted p-value, it is defined as up-regulated. When its log2fold change is negative, and adjusted p-value is negative, it is down-regulated.
+Now we can filter our dds file to only keep differentially expressed genes. When a gene has a log2fold change positive and an adjusted p-value $<0.05$, it is defined as up-regulated. When its log2fold change is negative, and adjusted p-value is $<0.05$, it is down-regulated.
 
 ```{r diff_express_creation}
 dds_res <- dds_res%>%mutate(diffexpressed=case_when(
@@ -118,7 +118,7 @@ print(paste('When keeping only differentially expressed genes we go from',
 ```{r post_diff_expressed_duplicates}
 print(paste("Out of the", nrow(dds_res), "differentially expressed genes,",length(unique(dds_res$symbol)),"are non duplicates (",round(100*length(unique(dds_res$symbol))/nrow(dds_res),1),"%)."))
 ```
-We create a list containing two data frames : the up-regulated and the down-regulated. ClusterProfiler will be run seprately on each of these subsets.
+We create a list containing two data frames : the up-regulated and the down-regulated. ClusterProfiler will be run separately on each of these subsets.
 
 ```{r up_down_list_creation}
 def_results_list <- split(dds_res,dds_res$diffexpressed)
@@ -200,40 +200,48 @@ The different GO databases are located in https://bioconductor.org/packages/rele
 GO comprises three orthogonal ontologies : molecular function (MF), biological process (BP), and cellular component (CC). The optin "All" allows to select them all. These four options can be tested in the following. But we shall show the results only for the 'All' orthogonal ontology.
 
 ```{r ont_val_selection} 
-ont_val=c('BP','MF','CC','ALL')[4] #select the wanted ont value by changing the number (1 to 4)
+ont_vals=c('BP','MF','CC','ALL') #select the wanted ont value by changing the number (1 to 4)
 ```
 
 
 Similar to KEGG analysis, the GO analysis shall be performed for up and down-regulated genes. The p-adjusted method is the default one : Benjamini-Hochberg. The p-value cutoff is at $5\%$. 
-```{r go_prep} 
-DOWN_res_go = enrichGO(gene=def_results_list[[1]]$entrez_id,
-                       OrgDb     = 'org.Hs.eg.db',   ont=ont_val,pvalueCutoff=0.05 )
-UP_res_go = enrichGO(gene=def_results_list[[2]]$entrez_id,
-                     OrgDb     = 'org.Hs.eg.db',   ont=ont_val, pvalueCutoff=0.05 )
-
-res_go <- lapply(names(def_results_list) , 
-              function(x) enrichGO(gene=def_results_list[[x]]$entrez_id,
-                                   OrgDb     = 'org.Hs.eg.db', pvalueCutoff=0.05 ))
-
-names(res_go) <- names(def_results_list)
-
-
-res_df_go <- rbind(res_go[[1]]@result%>%mutate(UP_DOWN=names(res_go)[1]),res_go[[2]]@result%>%mutate(UP_DOWN=names(res_go)[2]))
-
-head(res_df_go) 
+```{r go_prep_func}
+go_func <- function(def_results_list,ont_val){
+  DOWN_res_go = enrichGO(gene=def_results_list[[1]]$entrez_id,
+                         OrgDb     = 'org.Hs.eg.db',   ont=ont_val,pvalueCutoff=0.05 )
+  UP_res_go = enrichGO(gene=def_results_list[[2]]$entrez_id,
+                       OrgDb     = 'org.Hs.eg.db',   ont=ont_val, pvalueCutoff=0.05 )
+  
+  res_go <- lapply(names(def_results_list) , 
+                function(x) enrichGO(gene=def_results_list[[x]]$entrez_id,
+                                     OrgDb     = 'org.Hs.eg.db', pvalueCutoff=0.05 ))
+  
+  names(res_go) <- names(def_results_list)
+  
+  
+  res_df_go <- rbind(res_go[[1]]@result%>%mutate(UP_DOWN=names(res_go)[1]),res_go[[2]]@result%>%mutate(UP_DOWN=names(res_go)[2]))
+  
+  head(res_df_go) 
 #pour sauvegarder donnees:
-# write.csv(DOWN_res_go,paste0("./Output_R_Aless/GO_results/DOWN_res_go_",ont_val,"_unique.csv"), row.names = T)
-# write.csv(UP_res_go,paste0("./Output_R_Aless/GO_results/UP_res_go_",ont_val,"_unique.csv"), row.names = T)
+ write.csv(DOWN_res_go,paste0("./Output_R_Aless/GO_results/DOWN_res_go_",ont_val,"_unique.csv"), row.names = T)
+ write.csv(UP_res_go,paste0("./Output_R_Aless/GO_results/UP_res_go_",ont_val,"_unique.csv"), row.names = T)
 # 
-# write.csv(res_df_go,paste0("./Output_R_Aless/GO_results/UP_res_go_",ont_val,"_unique.csv"), row.names = T)
-#  
-
+ write.csv(res_df_go,paste0("./Output_R_Aless/GO_results/UP_Down_res_go_",ont_val,"_unique.csv"), row.names = T)
+ 
+return (list(UP_res_go,DOWN_res_go))}
 ```
 
 ## GO Analysis
 
-```{r go_plots}
+The following results are shown for each ontology value.
 
+### GO - Biological Process
+
+```{r go_ont_1}
+ont_val=ont_vals[1]
+go_func_res<- go_func(def_results_list,ont_val)
+UP_res_go  =go_func_res[[1]]
+DOWN_res_go  =go_func_res[[2]]
 dotplot(UP_res_go,showCategory = 20,title=paste('GO - Up regulated - ont:',ont_val))
 dotplot(DOWN_res_go,showCategory = 20,title=paste('GO - Down regulated - ont:',ont_val)) 
 
@@ -255,7 +263,97 @@ treeplot(pairwise_termsim(DOWN_res_go))# ,title=paste('GO - DOWN_res regulated -
 emapplot(pairwise_termsim(UP_res_go))# ,title=paste('GO - Up regulated - ont:',ont_val))
 emapplot(pairwise_termsim(DOWN_res_go))# ,title=paste('GO - DOWN_res regulated - ont:',ont_val))
 
+```
 
+### GO - Molecular Function
+
+```{r go_ont_2}
+
+ont_val=ont_vals[2]
+go_func_res<- go_func(def_results_list,ont_val)
+UP_res_go  =go_func_res[[1]]
+DOWN_res_go  =go_func_res[[2]]
+dotplot(UP_res_go,showCategory = 20,title=paste('GO - Up regulated - ont:',ont_val))
+dotplot(DOWN_res_go,showCategory = 20,title=paste('GO - Down regulated - ont:',ont_val)) 
+
+barplot(UP_res_go,showCategory = 20,title=paste('GO - Up regulated - ont:',ont_val))
+barplot(DOWN_res_go,showCategory = 20,title=paste('GO - Down regulated - ont:',ont_val))
+
+
+
+cnetplot(UP_res_go ,title=paste('GO - Up regulated - ont:',ont_val))
+cnetplot(DOWN_res_go ,title=paste('GO - Down regulated - ont:',ont_val))
+
+heatplot(UP_res_go,showCategory = 12)# ,title=paste('GO - Up regulated - ont:',ont_val))
+heatplot(DOWN_res_go,showCategory = 20)# ,title=paste('GO - Down regulated - ont:',ont_val))
+
+
+treeplot(pairwise_termsim(UP_res_go))# ,title='paste(GO - Up regulated - ont:',ont_val))
+treeplot(pairwise_termsim(DOWN_res_go))# ,title=paste('GO - DOWN_res regulated - ont:',ont_val))
+
+emapplot(pairwise_termsim(UP_res_go))# ,title=paste('GO - Up regulated - ont:',ont_val))
+emapplot(pairwise_termsim(DOWN_res_go))# ,title=paste('GO - DOWN_res regulated - ont:',ont_val))
+
+```
+
+### GO - Cellular Component
+
+```{r go_ont_3}
+
+ont_val=ont_vals[3]
+go_func_res<- go_func(def_results_list,ont_val)
+UP_res_go  =go_func_res[[1]]
+DOWN_res_go  =go_func_res[[2]]
+dotplot(UP_res_go,showCategory = 20,title=paste('GO - Up regulated - ont:',ont_val))
+dotplot(DOWN_res_go,showCategory = 20,title=paste('GO - Down regulated - ont:',ont_val)) 
+
+barplot(UP_res_go,showCategory = 20,title=paste('GO - Up regulated - ont:',ont_val))
+barplot(DOWN_res_go,showCategory = 20,title=paste('GO - Down regulated - ont:',ont_val))
+
+
+
+cnetplot(UP_res_go ,title=paste('GO - Up regulated - ont:',ont_val))
+cnetplot(DOWN_res_go ,title=paste('GO - Down regulated - ont:',ont_val))
+
+heatplot(UP_res_go,showCategory = 12)# ,title=paste('GO - Up regulated - ont:',ont_val))
+heatplot(DOWN_res_go,showCategory = 20)# ,title=paste('GO - Down regulated - ont:',ont_val))
+
+
+treeplot(pairwise_termsim(UP_res_go))# ,title='paste(GO - Up regulated - ont:',ont_val))
+treeplot(pairwise_termsim(DOWN_res_go))# ,title=paste('GO - DOWN_res regulated - ont:',ont_val))
+
+emapplot(pairwise_termsim(UP_res_go))# ,title=paste('GO - Up regulated - ont:',ont_val))
+emapplot(pairwise_termsim(DOWN_res_go))# ,title=paste('GO - DOWN_res regulated - ont:',ont_val))
+
+```
+
+### GO - All
+
+```{r go_ont_4}
+ont_val=ont_vals[4]
+go_func_res<- go_func(def_results_list,ont_val)
+UP_res_go  =go_func_res[[1]]
+DOWN_res_go  =go_func_res[[2]]
+dotplot(UP_res_go,showCategory = 20,title=paste('GO - Up regulated - ont:',ont_val))
+dotplot(DOWN_res_go,showCategory = 20,title=paste('GO - Down regulated - ont:',ont_val)) 
+
+barplot(UP_res_go,showCategory = 20,title=paste('GO - Up regulated - ont:',ont_val))
+barplot(DOWN_res_go,showCategory = 20,title=paste('GO - Down regulated - ont:',ont_val))
+
+
+
+cnetplot(UP_res_go ,title=paste('GO - Up regulated - ont:',ont_val))
+cnetplot(DOWN_res_go ,title=paste('GO - Down regulated - ont:',ont_val))
+
+heatplot(UP_res_go,showCategory = 12)# ,title=paste('GO - Up regulated - ont:',ont_val))
+heatplot(DOWN_res_go,showCategory = 20)# ,title=paste('GO - Down regulated - ont:',ont_val))
+
+
+treeplot(pairwise_termsim(UP_res_go))# ,title='paste(GO - Up regulated - ont:',ont_val))
+treeplot(pairwise_termsim(DOWN_res_go))# ,title=paste('GO - DOWN_res regulated - ont:',ont_val))
+
+emapplot(pairwise_termsim(UP_res_go))# ,title=paste('GO - Up regulated - ont:',ont_val))
+emapplot(pairwise_termsim(DOWN_res_go))# ,title=paste('GO - DOWN_res regulated - ont:',ont_val))
 
 ```
 

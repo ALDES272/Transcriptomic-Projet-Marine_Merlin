@@ -11,6 +11,11 @@ output:
     toc_float:
       collapsed: no
       smooth_scroll : yes
+bibliography: ../Bibliography/biblio.bib  
+csl: ../Bibliography/apa.csl 
+editor_options: 
+  markdown: 
+    wrap: sentence
 ---
 
 ```{r setup, include=FALSE}
@@ -27,7 +32,7 @@ knitr::opts_knit$set(root.dir = your_folder)
 
 # Introduction
 
-This document presents the different DeSeq analysis that were performed in the work of Merlin M. et al.
+This document presents the different DESeq analysis that were performed in the work of Merlin M. et al.
 
 This document was based on the informations provided by the following : 
 
@@ -46,6 +51,7 @@ library(ComplexHeatmap)
 library(apeglm)
 library(pheatmap)
 library("RColorBrewer")
+library(circlize)
 ```
 
 # Raw Data
@@ -55,11 +61,11 @@ We import the raw data for this study.
 #to adapt to your pathway :
 raw_file="./Data/raw_counts.xlsx"
 
-raw_counts <- read_excel(raw_file)
-print(nrow(raw_counts))
+raw_counts <- read_excel(raw_file) 
+print(paste0("The raw data number of lines is : ",nrow(raw_counts)))
 #we only keep non duplicate values
 raw_counts <- distinct(raw_counts)
-print(nrow(raw_counts))
+print(paste("After removing the duplicate lines, the number of lines drops to : ",nrow(raw_counts)))
 raw_counts_mat<- raw_counts[, -1] %>% as.matrix
 rownames(raw_counts_mat)<- raw_counts$symbol
 head(raw_counts_mat)
@@ -74,11 +80,11 @@ rownames(coldata)<- colnames(raw_counts_mat)
 head(coldata) 
 print(paste("Is the coldata rownames order similar to raw_counts_mat colnames order ?", all(rownames(coldata) == colnames(raw_counts_mat)))) 
 ```
-# DeSeq Object
+# DESeq object
 
-## DeSeqDataSet creation
+## DESeqDataSet creation
 
-Now we can run the DeSeq2 script.
+Now we can run the DESeq2 script [@love2014moderated].
 
 ```{r deseqdataset_run}
 
@@ -94,20 +100,20 @@ keep <- rowSums(counts(dds)>= 10) >=3
 print(paste("With this filter,",sum(keep==T),"genes are kept (",round(sum(keep==T)*100/length(keep),2),"%)"))
 dds <- dds[keep,]
 ```
-The default reference level is chosen alphabetically (i.e, in this case "Control"). But just to ensure this, we run the following line.
+The default reference level is chosen alphabetically (i.e, in this case, "Control"). But just to ensure this, we run the following line.
 
 ```{r level_set_up}
 print(paste('In our dds, ',levels(dds$condition)[1],' is the reference and',
             levels(dds$condition)[2], ' is compared to it.'))
 ```
-## DeSeq run
+## DESeq run
 Now we can run the differential expression analysis.
 
 ```{r deseq_run, message=FALSE, warning=FALSE}
 dds <- DESeq(dds) 
 ```
 
-The dds results are saved in the following res_xxx variables, with the default results method saved in the res variable.
+The dds results are saved in the following res_xxx variables, with the default results method saved in the res variable. By default, independent filtering is performed to select a set of genes for multiple test correction which maximizes the number of adjusted p-values less than a given critical value alpha (by default 0.1)
 
 ```{r deseq_results}
 res <- results(dds, contrast = c("condition", "TMZ", "Control")) 
@@ -118,7 +124,7 @@ res_bonferroni <- results(dds, contrast = c("condition", "TMZ", "Control"),pAdju
 res_holm <- results(dds, contrast = c("condition", "TMZ", "Control"),pAdjustMethod= "holm") 
 ```
 
-In the previous lines, we defined each res_xxx variable based on different pAdjustMethods, with the default being BH. These results files have the following structure :
+In the previous lines, we defined each res_xxx variable based on different adjusted p-values, with the default being BH. These results files have the following structure :
 ```{r res_xxx_structure}
 res
 
@@ -135,18 +141,18 @@ write.csv(as.data.frame(res),"./Output_R_Aless/dds_res_unique.csv", row.names = 
 
 - **padj** is the p-value corrected for multiple-testing (?). It allows to remove false positive results based on the given method (Benjamini, Hochberg, etc.).
 
-Based on the following : https://bioconductor.org/packages/devel/bioc/vignettes/DESeq2/inst/doc/DESeq2.html#alternative-shrinkage-estimators , we also define a resLFC variable. It is based on an alternative shrinkage estimator and allows for better ranking and visualisation.
+Based on the following : https://bioconductor.org/packages/devel/bioc/vignettes/DESeq2/inst/doc/DESeq2.html#alternative-shrinkage-estimators , we also define a resLFC variable. It is based on an alternative shrinkage estimator and allows for better ranking and visualisation [@zhu2019heavy].
 
 ```{r resLFC_creation}
 resLFC <- lfcShrink(dds, coef="condition_TMZ_vs_Control", type="apeglm") 
 ```
 
 
-# DeSeq results analysis
+# DESeq results analysis
 
 ## MA-plot
 
-The following line gives a summary of the results obtained in the default res variable :
+The following line gives a summary of the results obtained in the default res variable. By the default, the DESeq function applies an adjusted p-value cutoff of alpha < 0.1.
 ```{r deseq_res_summary}
 summary(res)
 ```
@@ -168,7 +174,7 @@ In the shrunken MA-plot, we had removed the noise associated with log2 fold chan
 
 ## Volcano plot
 
-Here are presented  the volcano plots corresponding to each Deseq result. 
+Here are presented  the volcano plots corresponding to each DESeq result. 
 
 ```{r volcano_plots}
 volcanofunc <- function(ds_res,subtt){
@@ -182,31 +188,32 @@ volcanofunc <- function(ds_res,subtt){
               round(100*nb_up/nrow(ds_res),2),'%'))
   print(paste('In the',subtt, 'result file, there are', nb_dw, 'genes Down,',
               round(100*nb_dw/nrow(ds_res),2),'%'))
-  
-  res_sig <- ds_res%>%
-    as.data.frame()%>%
-    tibble::rownames_to_column(var='gene')%>%
-    filter(!stringr::str_detect(gene,'LOC'))%>%
-    filter(abs(log2FoldChange)>=4,padj<=0.001)
+
+  # res_sig <- ds_res%>%
+  #   as.data.frame()%>%
+  #   tibble::rownames_to_column(var='gene')%>%
+  #   filter(!stringr::str_detect(gene,'LOC'))%>%
+  #   filter(abs(log2FoldChange)>=4,padj<=0.01)
     
   ggplot(data=ds_res, aes(x=log2FoldChange, y=-log10(padj),col=diffexpressed_padj)) + 
     geom_point() + 
-    theme_minimal() +
+    theme_classic() +
+    theme(axis.text=element_text(size=12), legend.text = element_text(size=13),legend.position="top",legend.justification='left')+
     # geom_label(data=res_sig,aes(label=gene))+
     scale_color_manual(values=c("#4285f4", "grey", "#ea4335"))+
+    scale_x_continuous(breaks = seq(-5, 5, by = 1))+
     theme(legend.title=element_blank())+
     ggtitle(paste("Volcano Plot -",subtt))
   
 }
 
 ##volcano plot de BH
-volcanofunc(res,'Default')
+volcanofunc(res,'Default (BH)')
 ```
 
 
 ```{r volcano_plots_BH}
-##volcano plot des autres 
-volcanofunc(res_BH, 'BH') #BH correspond à la correction de défaut
+volcanofunc(res_BH, 'BH') #BH cis similar to the default one
 ```
 
 
@@ -242,28 +249,89 @@ For a particular gene, a log2 fold change of -1 for condition treated vs untreat
 
 - If within a row, all samples have zero counts, the baseMean column will be zero, and the log2 fold change estimates, p value and adjusted p value will all be set to NA.
 
-- If a row contains a sample with an extreme count outlier then the p value and adjusted p value will be set to NA. These outlier counts are detected by Cook’s distance. Customization of this outlier filtering and description of functionality for replacement of outlier counts and refitting is described below
+- If a row contains a sample with an extreme count outlier then the p value and adjusted p value will be set to NA. These outlier counts are detected by Cook’s distance.
 
-- If a row is filtered by automatic independent filtering, for having a low mean normalized count, then only the adjusted p value will be set to NA. Description and customization of independent filtering is described below
+- If a row is filtered by automatic independent filtering, for having a low mean normalized count, then only the adjusted p value will be set to NA. 
 
 ## Variance Stabilizing Transformation and PCA
 
 This transformation removes the dependance of the variance on the mean. We can then plot the PCA (principal components analysis). 
 
+ 
+
 ```{r vsd1}
 vsd <- vst(dds, blind=FALSE) #Extracting transformed values
 # head(assay(vsd), 4)
 
-# plotPCA(vsd, intgroup=c("condition")) # par défaut cette ligne ne prend aue les n=500 premiers genes
-plotPCA(vsd, intgroup=c("condition"),ntop=length(assay(vsd))) # ici permet d'obtenir le meme graphique que plus bas
+# plotPCA(vsd, intgroup=c("condition")) # by default, this only considers the first n=500 genes
+plotPCA(vsd, intgroup=c("condition"),ntop=length(assay(vsd)) ) # this line allows us to create the same one as below.
 ```
 
-This plot was generated by using all of the genes (n=`r length(assay(vsd))`).
+This plot was generated by using all of the genes (n=`r length(assay(vsd))`). The source code of this PCA plot function was modfied to personnalize the colors, etc. as shown below.
+
+
+```{r my_pca_plot,echo=T}
+my_pca_plot_func = function(object, intgroup="condition",
+                                  ntop=500, returnData=FALSE, pcsToUse=1:2)
+{
+  message(paste0("using ntop=",ntop," top features by variance"))
+  
+  # calculate the variance for each gene
+  rv <- rowVars(assay(object))
+
+  # select the ntop genes by variance
+  select <- order(rv, decreasing=TRUE)[seq_len(min(ntop, length(rv)))]
+
+  # perform a PCA on the data in assay(x) for the selected genes
+  pca <- prcomp(t(assay(object)[select,]))
+
+  # the contribution to the total variance for each component
+  percentVar <- pca$sdev^2 / sum( pca$sdev^2 )
+
+  if (!all(intgroup %in% names(colData(object)))) {
+    stop("the argument 'intgroup' should specify columns of colData(dds)")
+  }
+
+  # add the intgroup factors together to create a new grouping factor 
+  group <- if (length(intgroup) > 1) {
+    intgroup.df <- as.data.frame(colData(object)[, intgroup, drop=FALSE])
+    factor(apply( intgroup.df, 1, paste, collapse=":"))
+  } else {
+    colData(object)[[intgroup]]
+  }
+
+  # assembly the data for the plot
+  pcs <- paste0("PC", pcsToUse)
+  d <- data.frame(V1=pca$x[,pcsToUse[1]],
+                  V2=pca$x[,pcsToUse[2]],
+                  group=group, name=colnames(object), colData(object))
+  colnames(d)[1:2] <- pcs
+  
+  if (returnData) {
+    attr(d, "percentVar") <- percentVar[pcsToUse]
+    return(d)
+  }
+
+  ggplot( data=d,aes( x = .data[[ pcs[1] ]],y = .data[[ pcs[2] ]],color=group)) +
+    scale_color_manual(values=c("#45B39D","#FFC300")) + 
+    geom_point(size=3) + 
+    xlab(paste0(pcs[1],": ",round(percentVar[pcsToUse[1]] * 100),"% variance")) +
+    ylab(paste0(pcs[2],": ",round(percentVar[pcsToUse[2]] * 100),"% variance")) +
+    theme_classic() +
+    theme(axis.text=element_text(size=12), legend.text = element_text(size=13),text = element_text(size = 13) )+
+    geom_hline(yintercept=0)+
+    geom_vline(xintercept=0)+
+    coord_fixed()
+}
+
+my_pca_plot_func(vsd, intgroup=c("condition"),ntop=length(assay(vsd)) )
+```
+ 
 
 
 
 ## Heatmap
-In this section we create the default heatmap. We first select the first 20 genomes in terms of average measured counts.
+In this section we create the default heatmap. We first select the first 20 genes in terms of average measured counts.
 
 ```{r pheatmap}
 select <- order(rowMeans(counts(dds,normalized=TRUE)),decreasing=TRUE)[1:20]
@@ -272,14 +340,14 @@ df <- as.data.frame(colData(dds)[,"condition"])
 colnames(df)=c('condition')
 rownames(df) <- colnames(assay(vsd))
 
-#ci-dessous est représenté sous forme de heatmap l'information suivante :
+#the following information is illustrated in the heatmap here below:
 assay(vsd)[select,]
 pheatmap(assay(vsd)[select,], cluster_rows=FALSE, show_rownames=T,
          cluster_cols=FALSE, annotation_col=df)
 
 ```
 
-This time we create a heat map with genes having the highest difference of average counts when comparing Control with TMZ
+This time we create a heatmap with genes having the highest difference of average counts when comparing Control with TMZ
 
 ```{r pheatmap2}
 
@@ -287,7 +355,7 @@ order_diff <- rownames(as.data.frame(counts(dds))%>%mutate(mean_diff=abs((ACt8+B
 #as.data.frame(counts(dds))%>%mutate(mean_diff=abs((ACt8+BCt8)/2-(ATTT8+BTTT8)/2)) %>%arrange(-mean_diff)
 
 
-select=order_diff[0:20] #prend vingt premieres
+select=order_diff[0:20] #we select the first 20 genes
 assay(vsd)[select,]
 pheatmap(assay(vsd)[select,], cluster_rows=FALSE, show_rownames=T,
          cluster_cols=FALSE, annotation_col=df)
@@ -341,7 +409,7 @@ mydf%>%arrange(diff_rel)%>%select(Ctrl_mean,Treat_mean,diff_abs,diff_rel)%>%head
 ```
 
 
-## Other PCA and Heatmap
+## Other PCA and heatmap
 
 The following is inspired by https://www.youtube.com/watch?v=LmZD_a8XZEQ.
 
@@ -362,7 +430,7 @@ ggplot(PC1_and_PC2, aes(x=PC1, y=PC2, col=type)) +
 
 ```
 
-We observe that the previous graph is similar to the automatically generated plotPCA function. We can now focus on the HeatMap. First we only keep the significant genes (p-value > 5% and log2FoldChange >1 or <-1)
+We observe that the previous graph is similar to the automatically generated plotPCA function. We can now focus on the heatmap First we only keep the significant genes (adjusted p-value <= 5% and log2FoldChange >1 or <-1).
 
 ```{r signifcant_genes}
 significant_genes<- res %>% as.data.frame() %>%
@@ -376,17 +444,29 @@ print(paste("When considering the signifcant genes, the number of genes went fro
 
 ```
 ```{r heat_map_bis}
-col_anno <- HeatmapAnnotation(df = coldata, col = list( condition = c("TMZ" = "orange", "Control" = "darkgreen")))
+col_fun = colorRamp2(c(-2, 0, 2), c("#4285F4", "white", "#EA4335"))
+col_fun_8_14 = colorRamp2(c(8, 10, 14), c("#4285F4", "white", "#EA4335"))
+col_anno <- HeatmapAnnotation(df = coldata, col = list(   condition= c("TMZ" = "#FFC300", "Control" = "#45B39D")))
 
 Heatmap(t(scale(t(significant_mat))), 
         top_annotation = col_anno,
-        show_row_names = FALSE, name = "scaled normalized\nexpression")
+        show_row_names = FALSE, name = "scaled normalized\nexpression",
+        col=col_fun )
+# Heatmap(t(scale(t(significant_mat))), 
+#         top_annotation = col_anno,
+#         show_row_names = FALSE, name = "scaled normalized\nexpression" )
 
-Heatmap(t((t(significant_mat))), 
-        top_annotation = col_anno,
-        show_row_names = FALSE, name = "unscaled")
+# Heatmap(t((t(significant_mat))), 
+#         top_annotation = col_anno,
+#         show_row_names = FALSE, name = "unscaled",
+#         col=col_fun_8_14)
+# Heatmap(t((t(significant_mat))), 
+#         top_annotation = col_anno,
+#         show_row_names = FALSE, name = "unscaled")
 ```
 
+
+# References
 
 
  
